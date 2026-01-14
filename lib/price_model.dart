@@ -97,4 +97,122 @@ class Candle {
       close: double.parse(data[4] as String),
     );
   }
+
+  /// Calculate percentage change from open to close
+  double get changePercent => open != 0 ? ((close - open) / open) * 100 : 0.0;
+}
+
+/// Order Book Entry (bid or ask)
+class OrderBookEntry {
+  final double price;
+  final double quantity;
+
+  OrderBookEntry({required this.price, required this.quantity});
+
+  factory OrderBookEntry.fromList(List<dynamic> data) {
+    return OrderBookEntry(
+      price: double.parse(data[0] as String),
+      quantity: double.parse(data[1] as String),
+    );
+  }
+}
+
+/// Order Book with bids and asks
+class OrderBook {
+  final List<OrderBookEntry> bids;
+  final List<OrderBookEntry> asks;
+
+  OrderBook({required this.bids, required this.asks});
+
+  factory OrderBook.fromJson(Map<String, dynamic> json) {
+    return OrderBook(
+      bids: (json['bids'] as List)
+          .map((e) => OrderBookEntry.fromList(e))
+          .toList(),
+      asks: (json['asks'] as List)
+          .map((e) => OrderBookEntry.fromList(e))
+          .toList(),
+    );
+  }
+
+  double get spread => asks.isNotEmpty && bids.isNotEmpty
+      ? asks.first.price - bids.first.price
+      : 0.0;
+  double get spreadPercent => bids.isNotEmpty && bids.first.price > 0
+      ? (spread / bids.first.price) * 100
+      : 0.0;
+}
+
+/// Recent Trade
+class Trade {
+  final int id;
+  final double price;
+  final double qty;
+  final int time;
+  final bool isBuyerMaker;
+
+  Trade({
+    required this.id,
+    required this.price,
+    required this.qty,
+    required this.time,
+    required this.isBuyerMaker,
+  });
+
+  factory Trade.fromJson(Map<String, dynamic> json) {
+    return Trade(
+      id: json['id'] as int,
+      price: double.parse(json['price'] as String),
+      qty: double.parse(json['qty'] as String),
+      time: json['time'] as int,
+      isBuyerMaker: json['isBuyerMaker'] as bool,
+    );
+  }
+
+  bool get isBuy => !isBuyerMaker; // If maker is seller, taker is buyer
+}
+
+/// Book Ticker (best bid/ask)
+class BookTicker {
+  final String symbol;
+  final double bidPrice;
+  final double bidQty;
+  final double askPrice;
+  final double askQty;
+
+  BookTicker({
+    required this.symbol,
+    required this.bidPrice,
+    required this.bidQty,
+    required this.askPrice,
+    required this.askQty,
+  });
+
+  factory BookTicker.fromJson(Map<String, dynamic> json) {
+    return BookTicker(
+      symbol: json['symbol'] as String,
+      bidPrice: double.parse(json['bidPrice'] as String),
+      bidQty: double.parse(json['bidQty'] as String),
+      askPrice: double.parse(json['askPrice'] as String),
+      askQty: double.parse(json['askQty'] as String),
+    );
+  }
+
+  double get spread => askPrice - bidPrice;
+  double get midPrice => (bidPrice + askPrice) / 2;
+}
+
+/// Average Price
+class AvgPrice {
+  final int mins;
+  final double price;
+
+  AvgPrice({required this.mins, required this.price});
+
+  factory AvgPrice.fromJson(Map<String, dynamic> json) {
+    return AvgPrice(
+      mins: json['mins'] as int,
+      price: double.parse(json['price'] as String),
+    );
+  }
 }

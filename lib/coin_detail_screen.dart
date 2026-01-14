@@ -22,18 +22,30 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
   // Stat placeholders
   double _rangeHigh = 0.0;
   double _rangeLow = 0.0;
-  double _rangeOpenPrice = 0.0; // For consistent % calculation with homepage
+  double _rangeOpenPrice = 0.0;
 
-  // 24h Ticker for stats (fetched once)
+  // 24h Ticker for stats
   PriceTicker? _ticker24h;
+
+  // New data
+  OrderBook? _orderBook;
+  List<Trade> _trades = [];
+  BookTicker? _bookTicker;
+  AvgPrice? _avgPrice;
+  double _1hOpenPrice = 0.0;
 
   @override
   void initState() {
     super.initState();
     _priceStream = _priceService.getTickerStream(widget.symbol);
-    _fetchTicker24h(); // Fetch full 24h ticker for stats
-    _fetchChartData('1h', 24); // Default 1D
+    _fetchTicker24h();
+    _fetchChartData('1h', 24);
+    _fetchRangeOpenPrice('1D');
     _fetch1HChange();
+    _fetchOrderBook();
+    _fetchTrades();
+    _fetchBookTicker();
+    _fetchAvgPrice();
   }
 
   Future<void> _fetchTicker24h() async {
@@ -48,24 +60,57 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
   }
 
   Future<void> _fetch1HChange() async {
-    // 1H change is specifically asked for.
-    // We can fetch the open price of 1h ago.
     try {
       final open = await _priceService.fetchOpenPriceForPeriod(
         widget.symbol,
         '1H',
       );
       if (mounted) {
-        setState(() {
-          _1hOpenPrice = open;
-        });
+        setState(() => _1hOpenPrice = open);
       }
     } catch (e) {
       debugPrint(e.toString());
     }
   }
 
-  double _1hOpenPrice = 0.0;
+  Future<void> _fetchOrderBook() async {
+    try {
+      final book = await _priceService.fetchOrderBook(widget.symbol, limit: 10);
+      if (mounted) setState(() => _orderBook = book);
+    } catch (e) {
+      debugPrint('Error fetching order book: $e');
+    }
+  }
+
+  Future<void> _fetchTrades() async {
+    try {
+      final trades = await _priceService.fetchRecentTrades(
+        widget.symbol,
+        limit: 15,
+      );
+      if (mounted) setState(() => _trades = trades.reversed.toList());
+    } catch (e) {
+      debugPrint('Error fetching trades: $e');
+    }
+  }
+
+  Future<void> _fetchBookTicker() async {
+    try {
+      final bt = await _priceService.fetchBookTicker(widget.symbol);
+      if (mounted) setState(() => _bookTicker = bt);
+    } catch (e) {
+      debugPrint('Error fetching book ticker: $e');
+    }
+  }
+
+  Future<void> _fetchAvgPrice() async {
+    try {
+      final ap = await _priceService.fetchAvgPrice(widget.symbol);
+      if (mounted) setState(() => _avgPrice = ap);
+    } catch (e) {
+      debugPrint('Error fetching avg price: $e');
+    }
+  }
 
   void _onRangeSelected(String range) {
     if (_selectedRange == range) return;
@@ -149,9 +194,12 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
           final ticker = snapshot.data;
           final price = ticker?.price ?? 0.0;
 
-          // Dynamic Range Change
+          // Dynamic Range Change - use _rangeOpenPrice for consistency with homepage
           double percent = 0.0;
-          if (_candles.isNotEmpty && price > 0) {
+          if (_rangeOpenPrice > 0 && price > 0) {
+            percent = ((price - _rangeOpenPrice) / _rangeOpenPrice) * 100;
+          } else if (_candles.isNotEmpty && price > 0) {
+            // Fallback to chart candles if rangeOpenPrice not yet loaded
             final openPrice = _candles.first.open;
             if (openPrice != 0)
               percent = ((price - openPrice) / openPrice) * 100;
@@ -225,7 +273,76 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                           child: LineChart(
                             LineChartData(
                               gridData: const FlGridData(show: false),
-                              titlesData: const FlTitlesData(show: false),
+                              titlesData: FlTitlesData(
+                                show: true,
+                                bottomTitles: AxisTitles(
+                                  sideTitles: SideTitles(
+                                    showTitles: true,
+                                    reservedSize: 22,
+                                    getTitlesWidget: (value, meta) {
+                                      final index = value.toInt();
+                                      if (index < 0 || index >= _candles.length)
+                                        return const SizedBox();
+
+                                      final date =
+                                          DateTime.fromMillisecondsSinceEpoch(
+                                            _candles[index].openTime,
+                                          );
+                                      String text;
+
+                                      // Simple formatting based on range
+                                      if (_selectedRange == '1D') {
+                                        // HH:mm for 1D
+                                        text =
+                                            '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+                                      } else if (_selectedRange == '1W' ||
+                                          _selectedRange == '1M') {
+                                        // MM/dd for 1W/1M
+                                        text = '${date.month}/${date.day}';
+                                      } else {
+                                        // MM/yy for 1Y
+                                        text =
+                                            '${date.month}/${date.year.toString().substring(2)}';
+                                      }
+
+                                      // Show fewer labels to avoid overlapping
+                                      // Logic: show label if index is multiple of (length / 5) roughly
+                                      int interval = (_candles.length / 5)
+                                          .ceil();
+                                      if (interval < 1) interval = 1;
+
+                                      if (index % interval != 0)
+                                        return const SizedBox();
+
+                                      return SideTitleWidget(
+                                        axisSide: meta.axisSide,
+                                        child: Text(
+                                          text,
+                                          style: TextStyle(
+                                            color: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.color
+                                                ?.withOpacity(0.5),
+                                            fontSize: 10,
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    interval:
+                                        1, // Draw titles at all intervals, filter in getTitlesWidget
+                                  ),
+                                ),
+                                leftTitles: const AxisTitles(
+                                  sideTitles: SideTitles(showTitles: false),
+                                ),
+                                topTitles: const AxisTitles(
+                                  sideTitles: SideTitles(showTitles: false),
+                                ),
+                                rightTitles: const AxisTitles(
+                                  sideTitles: SideTitles(showTitles: false),
+                                ),
+                              ),
                               borderData: FlBorderData(show: false),
                               minX: 0,
                               maxX: _candles.length.toDouble() - 1,
@@ -269,6 +386,45 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                                   ),
                                 ),
                               ],
+                              lineTouchData: LineTouchData(
+                                enabled: true,
+                                touchTooltipData: LineTouchTooltipData(
+                                  getTooltipItems: (touchedSpots) {
+                                    return touchedSpots.map((spot) {
+                                      final candle = _candles[spot.spotIndex];
+                                      return LineTooltipItem(
+                                        '\$${candle.close > 10 ? candle.close.toStringAsFixed(2) : candle.close.toStringAsPrecision(4)}\nO: ${candle.open.toStringAsFixed(2)}\nH: ${candle.high.toStringAsFixed(2)}\nL: ${candle.low.toStringAsFixed(2)}',
+                                        TextStyle(
+                                          color: color,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12,
+                                        ),
+                                      );
+                                    }).toList();
+                                  },
+                                ),
+                                getTouchedSpotIndicator: (data, spotIndexes) {
+                                  return spotIndexes.map((index) {
+                                    return TouchedSpotIndicatorData(
+                                      FlLine(
+                                        color: color.withOpacity(0.5),
+                                        strokeWidth: 1,
+                                      ),
+                                      FlDotData(
+                                        show: true,
+                                        getDotPainter:
+                                            (spot, percent, barData, index) {
+                                              return FlDotCirclePainter(
+                                                radius: 4,
+                                                color: color,
+                                                strokeWidth: 0,
+                                              );
+                                            },
+                                      ),
+                                    );
+                                  }).toList();
+                                },
+                              ),
                             ),
                           ),
                         ),
@@ -344,10 +500,178 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                   ),
                 ),
                 const SizedBox(height: 32),
+
+                // Extended Stats (Bid/Ask, Avg Price)
+                if (_bookTicker != null || _avgPrice != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Extended Stats',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 20,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        GridView.count(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          crossAxisCount: 2,
+                          childAspectRatio: 2.5,
+                          mainAxisSpacing: 16,
+                          crossAxisSpacing: 16,
+                          children: [
+                            if (_bookTicker != null) ...[
+                              _buildStatItem('Best Bid', _bookTicker!.bidPrice),
+                              _buildStatItem('Best Ask', _bookTicker!.askPrice),
+                              _buildStatItem('Spread', _bookTicker!.spread),
+                            ],
+                            if (_avgPrice != null)
+                              _buildStatItem(
+                                'Avg Price (${_avgPrice!.mins}m)',
+                                _avgPrice!.price,
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 32),
+
+                // Order Book
+                if (_orderBook != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Order Book',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 20,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildOrderBookSide(
+                                _orderBook!.bids,
+                                'Bids',
+                                Colors.green,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: _buildOrderBookSide(
+                                _orderBook!.asks,
+                                'Asks',
+                                Colors.red,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 32),
+
+                // Recent Trades
+                if (_trades.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Recent Trades',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 20,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        ...(_trades
+                            .take(10)
+                            .map((trade) => _buildTradeRow(trade))),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 32),
               ],
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildOrderBookSide(
+    List<OrderBookEntry> entries,
+    String title,
+    Color color,
+  ) {
+    return Column(
+      children: [
+        Text(
+          title,
+          style: TextStyle(color: color, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        ...entries
+            .take(5)
+            .map(
+              (e) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      e.price > 10
+                          ? e.price.toStringAsFixed(2)
+                          : e.price.toStringAsPrecision(4),
+                      style: TextStyle(color: color, fontSize: 12),
+                    ),
+                    Text(
+                      e.quantity.toStringAsFixed(4),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+      ],
+    );
+  }
+
+  Widget _buildTradeRow(Trade trade) {
+    final color = trade.isBuy ? Colors.green : Colors.red;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(
+            trade.isBuy ? Icons.arrow_upward : Icons.arrow_downward,
+            color: color,
+            size: 14,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            trade.price > 10
+                ? trade.price.toStringAsFixed(2)
+                : trade.price.toStringAsPrecision(4),
+            style: TextStyle(color: color, fontWeight: FontWeight.w500),
+          ),
+          const Spacer(),
+          Text(
+            trade.qty.toStringAsFixed(4),
+            style: const TextStyle(fontSize: 12),
+          ),
+        ],
       ),
     );
   }
